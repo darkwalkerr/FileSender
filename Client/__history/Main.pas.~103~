@@ -1,0 +1,156 @@
+unit Main;
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
+  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, IdBaseComponent, IdStack,
+  IdComponent, IdTCPConnection, IdTCPClient, IdHTTP, Winapi.ShellAPI;
+type
+  TForm1 = class(TForm)
+    ButtonGetFile: TButton;
+    IdTCPClient1: TIdTCPClient;
+    EditServerAdress: TEdit;
+    LabelAdress: TLabel;
+    EditServerPort: TEdit;
+    Label1: TLabel;
+    MemoLog: TMemo;
+    FileOpenDialog1: TFileOpenDialog;
+    LabeChoosedFolder: TLabel;
+    EditChoosedFolder: TEdit;
+    ButtonChangeFolder: TButton;
+    procedure ButtonGetFileClick(Sender: TObject);
+    procedure IdTCPClient1Connected(Sender: TObject);
+    procedure IdTCPClient1Disconnected(Sender: TObject);
+    procedure FormClose(Sender: TObject; var Action: TCloseAction);
+    procedure ButtonChangeFolderClick(Sender: TObject);
+  private
+    { Private declarations }
+  public
+    { Public declarations }
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.dfm}
+
+procedure TForm1.ButtonChangeFolderClick(Sender: TObject);
+begin
+with TFileOpenDialog.Create(nil) do
+  try
+    Options := [fdoPickFolders];
+    if Execute then
+      EditChoosedFolder.Text := Filename;
+  finally
+    Free;
+  end;
+end;
+
+procedure TForm1.ButtonGetFileClick(Sender: TObject);
+var
+  LMemoryStream: TMemoryStream;
+  LFileName: string;
+  FileSize: Int64;
+  FileNameLength: Integer;
+  Index: Integer;
+begin
+  try
+    // Отключаемся, если уже подключены
+    if IdTCPClient1.Connected then
+    begin
+      IdTCPClient1.Disconnect; // Если уже подключены, отключаемся
+      IdTCPClient1.IOHandler.InputBuffer.Clear; // Очищаем буфер ввода
+    end;
+    // Прописываем IP адрес сервера из текстового поля
+    IdTCPClient1.Host := EditServerAdress.Text;
+    // Прописываем порт сервера из текстового поля
+    IdTCPClient1.Port := StrToInt(EditServerPort.Text);
+    // Коннектимся к серверу
+    try
+      IdTCPClient1.Connect;
+    except
+      on E: Exception do
+      begin
+        ShowMessage('Error: ' + E.Message);
+        Exit;
+      end;
+    end;
+
+    // Проверяем, подключен ли клиент
+    if IdTCPClient1.Connected then
+    begin
+      try
+        // Читаем длину имени файла
+        FileNameLength := IdTCPClient1.IOHandler.ReadLongInt;
+        // Читаем имя файла
+        LFileName := IdTCPClient1.IOHandler.ReadString(FileNameLength);
+        // Убираем путь из имени файла
+        Index := LastDelimiter('/', LFileName);
+        LFileName := Copy(LFileName, Index + 1, Length(LFileName) - Index);
+        // Читаем размер файла
+        FileSize := IdTCPClient1.IOHandler.ReadInt64;
+        // Проверяем, что есть папка, в которую хотим сохранить полученный файл
+        if not DirectoryExists(EditChoosedFolder.Text) then
+          CreateDir(EditChoosedFolder.Text);
+        // Создаем поток для хранения содержимого файла
+        LMemoryStream := TMemoryStream.Create;
+        try
+          // Выставляем параметры, вдруг файл большой
+          IdTCPClient1.IOHandler.LargeStream := True;
+          // загружаем полученное в поток
+          IdTCPClient1.IOHandler.ReadStream(LMemoryStream, FileSize, False);
+          //Встаем на начало потока
+          LMemoryStream.Position := 0;
+          //Сохраняем поток в файл с полученным именем
+          LMemoryStream.SaveToFile(EditChoosedFolder.Text + LFileName);
+          //Пишем в мемо
+          MemoLog.Lines.Add('File downloaded successfully: '+ DateTimeToStr(Now));
+        finally
+          // Очищаем поток и закрываем
+          LMemoryStream.Free;
+        end;
+      finally
+        // Отключаемся
+        IdTCPClient1.Disconnect;
+      end;
+      // Открываем файл в стандартном приложении
+      ShellExecute(0, 'OPEN', PChar(EditChoosedFolder.Text + LFileName), '', '', SW_SHOWNORMAL);
+
+    end;
+  except
+    on E: EIdSocketError do
+    begin
+      if E.LastError <> 10038 then
+        raise; // Пробрасываем другие ошибки, кроме прерывания соединения
+    end;
+    on E: EIdNotASocket do
+    begin
+      ShowMessage('Error: ' + E.Message);
+      Exit;
+    end;
+  end;
+end;
+
+
+procedure TForm1.FormClose(Sender: TObject; var Action: TCloseAction);
+begin
+  //Освобождаем IdTCPClient1
+  FreeAndNil(IdTCPClient1);
+end;
+
+procedure TForm1.IdTCPClient1Connected(Sender: TObject);
+begin
+  //Пишем в мемо
+  MemoLog.Lines.Add('Client Connected: '+ DateTimeToStr(Now));
+end;
+
+procedure TForm1.IdTCPClient1Disconnected(Sender: TObject);
+begin
+  //Пишем в мемо
+  MemoLog.Lines.Add('Client Disconnected: '+ DateTimeToStr(Now));
+end;
+
+end.

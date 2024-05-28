@@ -1,0 +1,212 @@
+unit Main;
+
+interface
+
+uses
+  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
+  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, IdBaseComponent,
+  IdComponent, IdCustomTCPServer, IdCustomHTTPServer, IdHTTPServer, IdContext, IdStack,
+  IdIntercept, IdLogBase, IdLogFile, IdTCPServer;
+
+type
+  TForm1 = class(TForm)
+    MemoLog: TMemo;
+    ButtonStart: TButton;
+    ButtonStop: TButton;
+    EditPort: TEdit;
+    LabelPort: TLabel;
+    IdTCPServer1: TIdTCPServer;
+    EditFileName: TEdit;
+    ButtonСhooseFile: TButton;
+    Label1: TLabel;
+    OpenDialog1: TOpenDialog;
+    procedure ButtonStartClick(Sender: TObject);
+    procedure ButtonStopClick(Sender: TObject);
+    procedure FormCreate(Sender: TObject);
+    procedure IdTCPServer1Connect(AContext: TIdContext);
+    procedure IdTCPServer1Disconnect(AContext: TIdContext);
+    procedure FormClose(Sender: TObject; var Action: TCloseAction);
+    procedure ButtonСhooseFileClick(Sender: TObject);
+    procedure FormShow(Sender: TObject);
+    procedure IdTCPServer1Execute(AContext: TIdContext);
+  private
+    { Private declarations }
+    procedure StartServer;
+    procedure StopServer;
+  public
+    { Public declarations }
+    IsStarted: Boolean;
+  end;
+
+var
+  Form1: TForm1;
+
+implementation
+
+{$R *.dfm}
+
+procedure TForm1.ButtonStartClick(Sender: TObject);
+begin
+  StartServer;
+end;
+
+procedure TForm1.ButtonStopClick(Sender: TObject);
+begin
+  StopServer;
+end;
+
+procedure TForm1.ButtonСhooseFileClick(Sender: TObject);
+begin
+  if OpenDialog1.Execute then EditFileName.Text := OpenDialog1.FileName;
+end;
+
+procedure TForm1.FormClose(Sender: TObject; var Action: TCloseAction);
+begin
+  IdTCPServer1.Active :=  False;
+end;
+
+procedure TForm1.FormCreate(Sender: TObject);
+begin
+  //Начальные настройки при включении
+  IsStarted := False;
+  ButtonStop.Enabled := False;
+  ButtonStart.Enabled := True;
+end;
+
+procedure TForm1.FormShow(Sender: TObject);
+begin
+  StartServer;
+end;
+
+procedure TForm1.IdTCPServer1Connect(AContext: TIdContext);
+var
+  LIp        : string;
+  LPort      : Integer;
+  LPeerIP    : string;
+  LPeerPort  : Integer;
+begin
+  //Выводим информацию в мемо, когда клиент подключился
+  LIp := AContext.Binding.IP;
+  LPort := AContext.Binding.Port;
+  LPeerIP := AContext.Binding.PeerIP;
+  LPeerPort := AContext.Binding.PeerPort;
+  MemoLog.Lines.Add('Server Connected: '+ DateTimeToStr(Now) +' Port=' + IntToStr(LPort)
+                      + ' '   + '(PeerIP=' + LPeerIP
+                      + ' - ' + 'PeerPort=' + IntToStr(LPeerPort) + ')');
+end;
+
+procedure TForm1.IdTCPServer1Disconnect(AContext: TIdContext);
+var
+  LIp        : string;
+  LPort      : Integer;
+  LPeerIP    : string;
+  LPeerPort  : Integer;
+begin
+  //Выводим информацию в мемо, когда клиент отключается
+  try
+  LIp := AContext.Binding.IP;
+  LPort := AContext.Binding.Port;
+  LPeerIP := AContext.Binding.PeerIP;
+  LPeerPort := AContext.Binding.PeerPort;
+  MemoLog.Lines.Add('Server  Disconnected: '+ DateTimeToStr(Now) +' Port=' + IntToStr(LPort)
+                      + ' '   + '(PeerIP=' + LPeerIP
+                      + ' - ' + 'PeerPort=' + IntToStr(LPeerPort) + ')');
+  except
+     on E: E: EIdSocketError do
+     begin
+
+     end;
+  end;
+
+end;
+
+procedure TForm1.IdTCPServer1Execute(AContext: TIdContext);
+var
+  LMemoryStream: TMemoryStream;
+  LFileName: string;
+  FileNameLength: Integer;
+begin
+  // Путь к файлу на сервере
+  LFileName := EditFileName.Text;
+  try
+    // Создаем поток для хранения содержимого файла
+    LMemoryStream := TMemoryStream.Create;
+    try
+      // Загружаем файл в поток
+      LMemoryStream.LoadFromFile(LFileName);
+      // Отправляем длину имени файла
+      FileNameLength := Length(LFileName);
+      AContext.Connection.IOHandler.Write(FileNameLength);
+      // Отправляем имя файла
+       AContext.Connection.IOHandler.Write(LFileName);
+      // Настраиваем параметр для больших файлов
+      AContext.Connection.IOHandler.LargeStream := True;
+      // Встаем на начало потока
+      LMemoryStream.Position := 0;
+      // Отправляем содержимое файла
+      AContext.Connection.IOHandler.Write(LMemoryStream, 0, True);
+    finally
+      LMemoryStream.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      ShowMessage('Error: ' + E.Message);
+    end;
+    on E: EIdNotASocket do
+    begin
+    end;
+    on E: EIdSocketError do
+    begin
+      if E.LastError <> 10053 then
+        raise; // Пробрасываем другие ошибки, кроме прерывания соединения
+    end;
+  end;
+end;
+
+
+procedure TForm1.StartServer;
+begin
+  //Перед запуском сервера проверяем, что выбран файл
+  if EditFileName.Text = '' then
+  begin
+    ShowMessage('Выберите файл!');
+    exit;
+  end;
+
+  if not IsStarted then
+  begin
+    //Прописываем настройки для запуска сервера
+    IdTCPServer1.DefaultPort := StrToInt(EditPort.Text);
+    IdTCPServer1.Active := True;
+    //Ставим "флажок", что он запущен
+    IsStarted := True;
+    //Пишем в мемо о запуске
+    MemoLog.Lines.Add('Запуск сервера в: '+ DateTimeToStr(Now));
+    //Меняем доступность вкл/выкл на главной форме
+    ButtonStop.Enabled := True;
+    ButtonStart.Enabled := False;
+  end
+else
+  ShowMessage('Сервер уже запущен!');
+end;
+
+procedure TForm1.StopServer;
+begin
+if IsStarted then
+  begin
+    //Отключаем сервер
+    IdTCPServer1.Contexts.ClearAndFree;
+    IdTCPServer1.Active :=  False;
+    //Ставим "флажок", что он выключен
+    IsStarted := False;
+    //Пишем в мемо об остановке сервера
+    MemoLog.Lines.Add('Сервер остановлен в: '+ DateTimeToStr(Now));
+    ButtonStop.Enabled := False;
+    ButtonStart.Enabled := True;
+  end
+else
+  ShowMessage('Сервер уже остановлен!');
+end;
+
+end.
